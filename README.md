@@ -1,4 +1,5 @@
-🏙️ Civic Sense Bot
+## 🏙️ Civic Sense Bot
+
 A smart, persistent bot designed to help citizens easily report, track, and manage local civic issues (such as potholes, broken streetlights, or waste mismanagement) directly from their devices.
 Originally forked from the sherlock-bot repository, this project has been re-architected to serve the community by combining conversational commands with automated image analysis.
 ✨ Features
