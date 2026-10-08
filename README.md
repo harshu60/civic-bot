@@ -1,81 +1,72 @@
-## 🏙️ Civic Sense Bot
+# Civic Sense Bot
 
-A smart, persistent bot designed to help citizens easily report, track, and manage local civic issues (such as potholes, broken streetlights, or waste mismanagement) directly from their devices.
-Originally forked from the sherlock-bot repository, this project has been re-architected to serve the community by combining conversational commands with automated image analysis.
-✨ Features
- * Interactive Command Routing: The bot utilizes robust control structures (such as if-elif-else statements and loops) to seamlessly route user commands like /start, /report, and /status.
- * Image Captioning Integration: Users can upload photos of civic issues, which the bot processes through a Vision API to automatically generate descriptive text and log the severity of the problem.
-Here is a complete, well-structured README.md file tailored for your GitHub repository. It incorporates the project goals we discussed, along with the foundational programming and system administration concepts from your coursework.
-🏙️ Civic Sense Bot
-A smart, persistent bot designed to help citizens easily report, track, and manage local civic issues (such as potholes, broken streetlights, or waste mismanagement) directly from their devices.
-Originally forked from the sherlock-bot repository, this project has been re-architected to serve the community by combining conversational commands with automated image analysis.
-✨ Features
- * Interactive Command Routing: The bot utilizes robust control structures (such as if-elif-else statements and loops) to seamlessly route user commands like /start, /report, and /status.
- * Image Captioning Integration: Users can upload photos of civic issues, which the bot processes through a Vision API to automatically generate descriptive text and log the severity of the problem.
- * Short-Term & Persistent Memory: The bot tracks active user sessions and states using Python dictionaries. This allows the bot to remember what step of the reporting process a user is on before saving the final data to a persistent file.
- * Object-Oriented Architecture: The codebase is cleanly structured using Python classes, instance attributes, and methods. The bot initializes its settings via the __init__ constructor and bundles related functions (like report_issue or get_details) as class methods for easy maintenance.
-🛠️ Prerequisites
- * Python 3.x: Ensure Python is installed on your local machine or Codespace.
- * Basic Linux Navigation: You will need familiarity with basic Linux terminal commands like cd to change directories, ls to list files, and mkdir to create new folders for your data.
-🚀 Installation & Local Setup
-1. Clone the repository:
-Open your terminal and pull down your fork:
-git clone https://github.com/harshu60/civic-bot.git
+Civic Sense is a Discord bot for reporting local problems such as potholes,
+broken streetlights, flooding, waste, graffiti, and sidewalk damage. A photo is
+classified by a DeepSeek vision-capable model and saved in a shared ChromaDB
+collection that anyone using the bot can browse with `/issues`.
 
-2. Navigate to the project directory:
-cd civic-bot
+## Features
 
-(Note: Use the pwd command if you ever need to check your current working directory.)
-3. Configure your API Keys:
-Create a .env file in the root directory and add your Discord/Bot Token and your chosen Vision API token for the image captioning feature.
-4. Run the bot:
-Execute the main Python script to boot up the bot:
-python bot.py
+- `/report`: analyze and publish a civic issue photo, with optional location context.
+- `/issues`: show the latest public reports and their image links.
+- Automatic analysis for images posted in a configured home channel.
+- `/status`, `/ping`, `/set_home_channel`, and `/disable_home_channel`.
+- Persistent local database in `memory/` and server settings in `data/servers.json`.
 
-🖥️ Server Deployment & Automation
-If you plan to host this bot 24/7 on a Linux Virtual Private Server (VPS) or cloud environment:
- * Script Permissions: Ensure your startup scripts are executable by modifying their file permissions using the chmod command (e.g., chmod +x start.sh).
- * Automated Backups: You can schedule routine backups of the bot's reported issues database using cron jobs. For example, a scheduled task can run a shell script to automatically archive logs every night.
-🤝 Contributing
-This project is built for continuous improvement. Future roadmap goals include data visualization of reported issues (using tools like Tableau or Microsoft Power BI) and training custom machine learning classification models to categorize issues automatically based on user images.
+## Architecture
 
- * Short-Term & Persistent Memory: The bot tracks active user sessions and states using Python dictionaries. This allows the bot to remember what step of the reporting process a user is on before saving the final data to a persistent file.
- * Object-Oriented Architecture: The codebase is cleanly structured using Python classes, instance attributes, and methods. The bot initializes its settings via the __init__ constructor and bundles related functions (like report_issue or get_details) as class methods for easy maintenance.
-🛠️ Prerequisites
- * Python 3.x: Ensure Python is installed on your local machine or Codespace.
- * Basic Linux Navigation: You will need familiarity with basic Linux terminal commands like cd to change directories, ls to list files, and mkdir to create new folders for your data.
-🚀 Installation & Local Setup
-1. Clone the repository:
-Here is a complete, well-structured README.md file tailored for your GitHub repository. It incorporates the project goals we discussed, along with the foundational programming and system administration concepts from your coursework.
-🏙️ Civic Sense Bot
-A smart, persistent bot designed to help citizens easily report, track, and manage local civic issues (such as potholes, broken streetlights, or waste mismanagement) directly from their devices.
-Originally forked from the sherlock-bot repository, this project has been re-architected to serve the community by combining conversational commands with automated image analysis.
-✨ Features
- * Interactive Command Routing: The bot utilizes robust control structures (such as if-elif-else statements and loops) to seamlessly route user commands like /start, /report, and /status.
- * Image Captioning Integration: Users can upload photos of civic issues, which the bot processes through a Vision API to automatically generate descriptive text and log the severity of the problem.
- * Short-Term & Persistent Memory: The bot tracks active user sessions and states using Python dictionaries. This allows the bot to remember what step of the reporting process a user is on before saving the final data to a persistent file.
- * Object-Oriented Architecture: The codebase is cleanly structured using Python classes, instance attributes, and methods. The bot initializes its settings via the __init__ constructor and bundles related functions (like report_issue or get_details) as class methods for easy maintenance.
-🛠️ Prerequisites
- * Python 3.x: Ensure Python is installed on your local machine or Codespace.
- * Basic Linux Navigation: You will need familiarity with basic Linux terminal commands like cd to change directories, ls to list files, and mkdir to create new folders for your data.
-🚀 Installation & Local Setup
-1. Clone the repository:
-Open your terminal and pull down your fork:
-git clone https://github.com/harshu60/civic-bot.git
+- [`agent.py`](./agent.py) owns image attachment validation, DeepSeek vision
+  requests, and strict parsing of the structured incident report.
+- [`bot.py`](./bot.py) owns Discord commands/events and public ChromaDB
+  persistence.
 
-2. Navigate to the project directory:
-cd civic-bot
+## Setup
 
-(Note: Use the pwd command if you ever need to check your current working directory.)
-3. Configure your API Keys:
-Create a .env file in the root directory and add your Discord/Bot Token and your chosen Vision API token for the image captioning feature.
-4. Run the bot:
-Execute the main Python script to boot up the bot:
-python bot.py
+1. Install Python 3.10 or newer.
+2. Install dependencies:
 
-🖥️ Server Deployment & Automation
-If you plan to host this bot 24/7 on a Linux Virtual Private Server (VPS) or cloud environment:
- * Script Permissions: Ensure your startup scripts are executable by modifying their file permissions using the chmod command (e.g., chmod +x start.sh).
- * Automated Backups: You can schedule routine backups of the bot's reported issues database using cron jobs. For example, a scheduled task can run a shell script to automatically archive logs every night.
-🤝 Contributing
-This project is built for continuous improvement. Future roadmap goals include data visualization of reported issues (using tools like Tableau or Microsoft Power BI) and training custom machine learning classification models to categorize issues automatically based on user images.
+   ```bash
+   python -m pip install -r requirements.txt
+   ```
+
+3. Create a `.env` file:
+
+   ```env
+   DISCORD_BOT_TOKEN=your_discord_bot_token
+   DEEPSEEK_API_KEY=your_deepseek_api_key
+   # Use the vision-capable model enabled for your DeepSeek-compatible endpoint.
+   DEEPSEEK_VISION_MODEL=deepseek-chat
+   # Optional: defaults to https://api.deepseek.com
+   DEEPSEEK_BASE_URL=https://api.deepseek.com
+   # Optional: guild where slash commands are synced immediately during development.
+   DEV_GUILD_ID=1384150666045558876
+   ```
+
+4. Enable the **Message Content Intent** for the bot in the Discord Developer
+   Portal if automatic home-channel analysis is needed.
+5. Start the bot:
+
+   ```bash
+   python bot.py
+   ```
+
+The bot must have permission to view channels, read message history, send
+messages, and use slash commands.
+
+## Public data and privacy
+
+Reports are intentionally public. The database stores the DeepSeek-generated
+summary, category, severity, timestamps, Discord source links, reporter display
+name, optional note, and the original Discord attachment URL. Do not submit
+private, sensitive, or identifying images. Discord attachment URLs can be
+accessible to anyone who receives them.
+
+The local `memory/` directory is the database and should be backed up if reports
+must survive redeployment. It is ignored by Git so reports remain on the running
+host only unless you explicitly back up that directory.
+
+## Development notes
+
+DeepSeek-compatible vision endpoints must support OpenAI-style
+`image_url` message content. If your provider uses a different model name,
+change `DEEPSEEK_VISION_MODEL` without changing the bot code.

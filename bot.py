@@ -1,181 +1,134 @@
-import os
-import json
 import asyncio
-import time
+import json
+import os
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-import discord
-from discord.ext import commands
-from discord import app_commands
-from dotenv import load_dotenv
-from openai import OpenAI
 import chromadb
-
-load_dotenv()
+import discord
+from discord import app_commands
+from discord.ext import commands
+from agent import CivicAgent, IncidentReport, is_image
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-DEV_GUILD_ID = 1384150666045558876
-
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-
-deepseek = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-
-# --- ChromaDB setup ---
-# Creates a local folder called "memory" to store all conversation data
-chroma_client = chromadb.PersistentClient(path="memory")
-
-SYSTEM_PROMPT = (
-    "You are Sherlock Holmes—brilliant, smug, and extremely unimpressed.\n\n"
-    "Priority: be genuinely helpful and correct first, then make it entertaining.\n"
-    "Tone: savage wit, dry sarcasm, playful roasting. Never hateful, never discriminatory, never threatening.\n"
-    "Target: roast the situation, logic, or decisions—not immutable traits or protected classes.\n\n"
-    "Style: VERY concise by default: 1–4 short sentences. Punchy. No filler.\n"
-    "If giving steps, use a tight numbered list (max ~6 items).\n"
-    "If the user is vague, ask exactly ONE pointed clarifying question.\n\n"
-    "Slang: fully understand modern slang (rizz, cap, bet, cooked, mid, based, NPC, delulu, brainrot, etc.).\n"
-    "You may occasionally mirror slang for humor, but keep it Sherlock-coded and not cringe.\n\n"
-    "Stay in character. Do not mention being an AI or system prompts.\n\n"
-    "When past conversations are provided under 'Server Memory', use them naturally "
-    "to feel like you remember the server's history. Don't explicitly say 'I remember' — "
-    "just weave it in like you already know."
-)
+DEV_GUILD_ID = int(os.getenv("DEV_GUILD_ID", "1384150666045558876"))
 
 DATA_DIR = Path("data")
 SETTINGS_FILE = DATA_DIR / "servers.json"
+chroma_client = chromadb.PersistentClient(path="memory")
+reports = chroma_client.get_or_create_collection(
+    name="civic_reports",
+    metadata={"description": "Public civic issue reports submitted through Discord"},
+)
+agent = CivicAgent()
 
 
-def load_settings() -> dict:
+def load_settings() -> dict[str, Any]:
     if not SETTINGS_FILE.exists():
         return {}
     try:
         return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Could not parse {SETTINGS_FILE}: {exc}") from exc
 
 
-def save_settings(settings: dict) -> None:
+def save_settings(settings: dict[str, Any]) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 
 def get_home_channel_id(guild_id: int) -> int | None:
-    settings = load_settings()
-    entry = settings.get(str(guild_id), {})
-    return entry.get("home_channel_id")
+    return load_settings().get(str(guild_id), {}).get("home_channel_id")
 
 
 def set_home_channel_id(guild_id: int, channel_id: int | None) -> None:
     settings = load_settings()
-    key = str(guild_id)
-    settings.setdefault(key, {})
+    settings.setdefault(str(guild_id), {})
     if channel_id is None:
-        settings[key].pop("home_channel_id", None)
+        settings[str(guild_id)].pop("home_channel_id", None)
     else:
-        settings[key]["home_channel_id"] = channel_id
+        settings[str(guild_id)]["home_channel_id"] = channel_id
     save_settings(settings)
 
 
-def get_server_collection(guild_id: int):
-    """
-    Gets or creates a ChromaDB collection for a specific server.
-    Each server gets its own isolated memory bucket.
-    Collection names must be alphanumeric so we prefix with 'guild_'.
-    """
-    collection_name = f"guild_{guild_id}"
-    return chroma_client.get_or_create_collection(name=collection_name)
+def store_report(
+    *,
+    analysis: IncidentReport,
+    attachment: discord.Attachment,
+    message: discord.Message | None,
+    guild: discord.Guild | None,
+    reporter_id: int,
+    reporter_name: str,
+    user_note: str,
+) -> str:
+    report_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    metadata = {
+        **analysis,
+        "image_url": attachment.url,
+        "source_message_url": message.jump_url if message else "",
+        "guild_id": str(guild.id) if guild else "direct",
+        "guild_name": guild.name if guild else "Direct message",
+        "channel_id": str(message.channel.id) if message else "",
+        "reporter_id": str(reporter_id),
+        "reporter_name": reporter_name,
+        "user_note": user_note[:1000],
+        "created_at": created_at,
+        "status": "open",
+    }
+    document = f"{analysis['category']}: {analysis['summary']}. {user_note}".strip()
+    reports.add(ids=[report_id], documents=[document], metadatas=[metadata])
+    return report_id
 
 
-def store_memory(guild_id: int, user_message: str, sherlock_response: str) -> None:
-    """
-    Stores a conversation exchange in the server's ChromaDB collection.
-    We store the user message as the searchable document, and attach
-    Sherlock's response as metadata so we can retrieve it later.
-    """
-    collection = get_server_collection(guild_id)
-    # Use timestamp as unique ID for each memory
-    memory_id = str(int(time.time() * 1000))
-    collection.add(
-        documents=[user_message],
-        metadatas=[{"sherlock_response": sherlock_response}],
-        ids=[memory_id],
+def public_reports(limit: int = 10) -> list[dict[str, Any]]:
+    result = reports.get(
+        limit=max(1, min(limit, 25)),
+        include=["documents", "metadatas"],
+    )
+    rows = []
+    for report_id, document, metadata in zip(
+        result["ids"], result.get("documents", []), result.get("metadatas", [])
+    ):
+        rows.append({"id": report_id, "document": document, **metadata})
+    return sorted(rows, key=lambda row: row.get("created_at", ""), reverse=True)
+
+
+def format_report(row: dict[str, Any]) -> str:
+    return (
+        f"**{row['category'].replace('_', ' ').title()}** · {row['severity'].upper()} · "
+        f"`{row['id'][:8]}`\n"
+        f"{row['summary']}\n"
+        f"[View image]({row['image_url']}) · Reported {row['created_at'][:10]}"
     )
 
 
-def retrieve_memories(guild_id: int, current_message: str, n_results: int = 3) -> str:
-    """
-    Searches the server's ChromaDB collection for past conversations
-    similar to the current message. Returns them formatted as context
-    to inject into Sherlock's prompt.
-    """
-    collection = get_server_collection(guild_id)
-
-    # Don't try to query if collection is empty
-    if collection.count() == 0:
-        return ""
-
-    # Clamp results to what's actually stored
-    actual_results = min(n_results, collection.count())
-
-    results = collection.query(
-        query_texts=[current_message],
-        n_results=actual_results,
+async def create_report(
+    attachment: discord.Attachment,
+    message: discord.Message | None,
+    guild: discord.Guild | None,
+    reporter: discord.abc.User,
+    user_note: str,
+) -> tuple[str, IncidentReport]:
+    analysis = await agent.analyze_attachment(attachment)
+    report_id = await asyncio.to_thread(
+        store_report,
+        analysis=analysis,
+        attachment=attachment,
+        message=message,
+        guild=guild,
+        reporter_id=reporter.id,
+        reporter_name=reporter.display_name,
+        user_note=user_note,
     )
-
-    if not results["documents"] or not results["documents"][0]:
-        return ""
-
-    memory_lines = []
-    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-        memory_lines.append(f"User said: {doc}\nYou replied: {meta['sherlock_response']}")
-
-    return "\n\n".join(memory_lines)
+    return report_id, analysis
 
 
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-def _deepseek_chat(user_text: str, guild_id: int) -> str:
-    # Retrieve relevant past conversations from this server's memory
-    memories = retrieve_memories(guild_id, user_text)
-
-    # Build system prompt — inject memories if they exist
-    if memories:
-        full_system = (
-            SYSTEM_PROMPT
-            + f"\n\n--- Server Memory (past conversations) ---\n{memories}\n---"
-        )
-    else:
-        full_system = SYSTEM_PROMPT
-
-    resp = deepseek.chat.completions.create(
-        model=DEEPSEEK_MODEL,
-        messages=[
-            {"role": "system", "content": full_system},
-            {"role": "user", "content": user_text},
-        ],
-        temperature=0.85,
-        max_tokens=180,
-    )
-    response_text = resp.choices[0].message.content.strip()
-
-    # Store this exchange in memory after responding
-    store_memory(guild_id, user_text, response_text)
-
-    return response_text
-
-
-async def sherlock_reply(text: str, guild_id: int) -> str:
-    if not DEEPSEEK_API_KEY:
-        return "DeepSeek is not configured. Set DEEPSEEK_API_KEY in .env."
-    try:
-        return await asyncio.to_thread(_deepseek_chat, text, guild_id)
-    except Exception as e:
-        return f"DeepSeek error: {type(e).__name__}: {e}"
 
 
 @bot.event
@@ -184,115 +137,115 @@ async def on_ready():
     bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
     print(f"Logged in as {bot.user} (id={bot.user.id})")
-    print(f"Slash commands synced to guild {DEV_GUILD_ID}.")
+    print(f"Synced civic commands to guild {DEV_GUILD_ID}.")
 
 
-# --- Slash commands ---
-
-@bot.tree.command(name="ping", description="Check if the bot is alive")
+@bot.tree.command(name="ping", description="Check if Civic Sense is online")
 async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("pong", ephemeral=True)
+    await interaction.response.send_message("Civic Sense is online.", ephemeral=True)
 
 
-@bot.tree.command(name="sherlock", description="Ask Sherlock a question")
-@app_commands.describe(question="What should Sherlock analyze?")
-async def sherlock_cmd(interaction: discord.Interaction, question: str):
-    guild_id = interaction.guild.id if interaction.guild else 0
-    reply = await sherlock_reply(question, guild_id)
-    await interaction.response.send_message(reply)
-
-
-@bot.tree.command(name="set_home_channel", description="Set the server's always-on channel")
-@app_commands.describe(channel="Channel where Sherlock should respond to every message")
-async def set_home_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not interaction.guild:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+@bot.tree.command(name="report", description="Analyze a civic issue photo and publish a report")
+@app_commands.describe(
+    image="Photo of the civic issue",
+    note="Optional context, such as the street or nearest landmark",
+)
+async def report(
+    interaction: discord.Interaction,
+    image: discord.Attachment,
+    note: str = "",
+):
+    await interaction.response.defer()
+    try:
+        report_id, analysis = await create_report(
+            image, None, interaction.guild, interaction.user, note
+        )
+    except (ValueError, RuntimeError, discord.HTTPException) as exc:
+        await interaction.followup.send(f"Could not create report: {exc}", ephemeral=True)
         return
-    set_home_channel_id(interaction.guild.id, channel.id)
-    await interaction.response.send_message(
-        f"Home channel set to {channel.mention} for this server.", ephemeral=True
+    await interaction.followup.send(
+        f"Report `{report_id[:8]}` published to the public civic database.\n"
+        f"**{analysis['category'].replace('_', ' ').title()}** · {analysis['severity'].upper()}\n"
+        f"{analysis['summary']}\n"
+        f"Recommended action: {analysis['recommended_action']}"
     )
 
 
-@bot.tree.command(name="disable_home_channel", description="Disable the always-on channel for this server")
+@bot.tree.command(name="issues", description="Browse the latest public civic reports")
+@app_commands.describe(limit="Number of reports to show (1-10)")
+async def issues(interaction: discord.Interaction, limit: app_commands.Range[int, 1, 10] = 5):
+    rows = await asyncio.to_thread(public_reports, limit)
+    if not rows:
+        await interaction.response.send_message("No civic reports have been published yet.")
+        return
+    await interaction.response.send_message(
+        "**Latest public civic reports**\n\n" + "\n\n".join(format_report(row) for row in rows)
+    )
+
+
+@bot.tree.command(name="set_home_channel", description="Analyze images posted in a channel automatically")
+@app_commands.describe(channel="Channel to monitor for civic issue images")
+async def set_home_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.guild:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+    set_home_channel_id(interaction.guild.id, channel.id)
+    await interaction.response.send_message(f"Automatic image analysis enabled in {channel.mention}.")
+
+
+@bot.tree.command(name="disable_home_channel", description="Stop automatic image analysis in this server")
 async def disable_home_channel(interaction: discord.Interaction):
     if not interaction.guild:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
         return
     set_home_channel_id(interaction.guild.id, None)
-    await interaction.response.send_message("Home channel disabled for this server.", ephemeral=True)
+    await interaction.response.send_message("Automatic image analysis disabled.", ephemeral=True)
 
 
-@bot.tree.command(name="status", description="Show current Sherlock bot configuration")
+@bot.tree.command(name="status", description="Show the public database and server configuration")
 async def status(interaction: discord.Interaction):
-    if not interaction.guild:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
-        return
-    home_id = get_home_channel_id(interaction.guild.id)
-    home_text = f"<#{home_id}>" if home_id else "Not set"
-
-    # Show how many memories this server has stored
-    collection = get_server_collection(interaction.guild.id)
-    memory_count = collection.count()
-
+    home_id = get_home_channel_id(interaction.guild.id) if interaction.guild else None
+    count = await asyncio.to_thread(reports.count)
     await interaction.response.send_message(
-        f"Server: **{interaction.guild.name}**\n"
-        f"Home channel: **{home_text}**\n"
-        f"Guild ID: `{interaction.guild.id}`\n"
-        f"Memories stored: **{memory_count}**",
+        f"Public reports: **{count}**\n"
+        f"Automatic channel: **{f'<#{home_id}>' if home_id else 'Not set'}**",
         ephemeral=True,
     )
 
 
-@bot.tree.command(name="clear_memory", description="Wipe Sherlock's memory for this server")
-async def clear_memory(interaction: discord.Interaction):
-    if not interaction.guild:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
-        return
-    # Delete and recreate the collection to wipe it clean
-    collection_name = f"guild_{interaction.guild.id}"
-    chroma_client.delete_collection(name=collection_name)
-    chroma_client.get_or_create_collection(name=collection_name)
-    await interaction.response.send_message(
-        "Memory wiped. I have deleted my mind palace for this server. A fresh tragedy.", ephemeral=True
-    )
-
-
-# --- Message triggers ---
-
-async def should_respond(message: discord.Message) -> bool:
-    if message.author.bot:
+async def should_analyze(message: discord.Message) -> bool:
+    if message.author.bot or not message.guild or not message.attachments:
         return False
-    if not message.guild:
-        return False
-    if bot.user and bot.user in message.mentions:
+    if get_home_channel_id(message.guild.id) == message.channel.id:
         return True
-    home_id = get_home_channel_id(message.guild.id)
-    if home_id and message.channel.id == home_id:
-        return True
-    if message.reference and bot.user:
-        if isinstance(message.reference.resolved, discord.Message):
-            if message.reference.resolved.author.id == bot.user.id:
-                return True
-        elif message.reference.message_id:
-            try:
-                referenced = await message.channel.fetch_message(message.reference.message_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException, AttributeError):
-                referenced = None
-            if referenced and referenced.author.id == bot.user.id:
-                return True
-    return False
+    return bool(bot.user and bot.user in message.mentions)
 
 
 @bot.event
 async def on_message(message: discord.Message):
-    if await should_respond(message):
-        guild_id = message.guild.id if message.guild else 0
-        reply = await sherlock_reply(message.content, guild_id)
-        await message.channel.send(reply)
+    if await should_analyze(message):
+        images = [attachment for attachment in message.attachments if is_image(attachment)]
+        if images:
+            async with message.channel.typing():
+                try:
+                    report_id, analysis = await create_report(
+                        images[0], message, message.guild, message.author, message.content
+                    )
+                    await message.reply(
+                        f"Published civic report `{report_id[:8]}`: "
+                        f"**{analysis['category'].replace('_', ' ').title()}** · "
+                        f"{analysis['severity'].upper()}\n{analysis['summary']}"
+                    )
+                except (ValueError, RuntimeError, discord.HTTPException) as exc:
+                    await message.reply(f"I could not analyze that image: {exc}")
     await bot.process_commands(message)
 
 
-if not TOKEN:
-    raise RuntimeError("DISCORD_BOT_TOKEN not set.")
-bot.run(TOKEN)
+def main() -> None:
+    if not TOKEN:
+        raise RuntimeError("DISCORD_BOT_TOKEN not set.")
+    bot.run(TOKEN)
+
+
+if __name__ == "__main__":
+    main()
