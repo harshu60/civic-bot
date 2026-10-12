@@ -12,14 +12,12 @@ from config import (
     AMC_ADDRESS,
     AMC_EMAIL,
     AMC_GRIEVANCE_PORTAL,
-    AMC_LOCALITIES,
     AMC_NAME,
     AMC_WEBSITE,
     AMC_WHATSAPP_NUMBER,
     DATA_DIR,
-    DEV_GUILD_ID,
     DISCORD_BOT_TOKEN,
-    WARDS_FILE,
+    SERVER_SETTINGS_FILE,
 )
 from ticket import TicketStore
 
@@ -27,53 +25,36 @@ agent = CivicAgent()
 ticket_store = TicketStore()
 
 
-def load_wards() -> dict[str, Any]:
-    if not WARDS_FILE.exists():
+def load_server_settings() -> dict[str, Any]:
+    if not SERVER_SETTINGS_FILE.exists():
         return {}
     try:
-        return json.loads(WARDS_FILE.read_text(encoding="utf-8"))
+        return json.loads(SERVER_SETTINGS_FILE.read_text(encoding="utf-8"))
     except ValueError as exc:
-        raise RuntimeError(f"Could not parse {WARDS_FILE}: {exc}") from exc
+        raise RuntimeError(f"Could not parse {SERVER_SETTINGS_FILE}: {exc}") from exc
 
 
-def save_wards(wards: dict[str, Any]) -> None:
+def save_server_settings(settings: dict[str, Any]) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    WARDS_FILE.write_text(json.dumps(wards, indent=2), encoding="utf-8")
-
-
-def get_ward(guild_id: int) -> dict[str, Any]:
-    return load_wards().get(str(guild_id), {})
+    SERVER_SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 
 def set_home_channel_id(guild_id: int, channel_id: int | None) -> None:
-    wards = load_wards()
-    wards.setdefault(str(guild_id), {})
+    settings = load_server_settings()
+    settings.setdefault(str(guild_id), {})
     if channel_id is None:
-        wards[str(guild_id)].pop("home_channel_id", None)
+        settings[str(guild_id)].pop("home_channel_id", None)
     else:
-        wards[str(guild_id)]["home_channel_id"] = channel_id
-    save_wards(wards)
+        settings[str(guild_id)]["home_channel_id"] = channel_id
+    save_server_settings(settings)
 
 
 def get_home_channel_id(guild_id: int) -> int | None:
-    return get_ward(guild_id).get("home_channel_id")
+    return load_server_settings().get(str(guild_id), {}).get("home_channel_id")
 
 
-def department_for(category: str, ward: dict[str, Any]) -> str:
-    return str(
-        ward.get("municipal_department")
-        or AMC_DEPARTMENT_BY_CATEGORY.get(category, AMC_DEPARTMENT_BY_CATEGORY["other"])
-    )
-
-
-def authority_for(note: str, ward: dict[str, Any]) -> str:
-    configured = ward.get("authority")
-    if configured:
-        return str(configured)
-    normalized_note = note.lower()
-    if any(locality in normalized_note for locality in AMC_LOCALITIES):
-        return AMC_NAME
-    return "Local authority not identified"
+def department_for(category: str) -> str:
+    return AMC_DEPARTMENT_BY_CATEGORY.get(category, AMC_DEPARTMENT_BY_CATEGORY["other"])
 
 
 def whatsapp_url(
@@ -101,10 +82,17 @@ def category_label(category: str) -> str:
     return category.replace("_", " ").title()
 
 
+def report_location(row: dict[str, Any]) -> str:
+    location_hint = str(row.get("location_hint") or "").strip()
+    if location_hint and location_hint.lower() not in {"not visible", "unknown"}:
+        return location_hint
+    user_note = str(row.get("user_note") or "").strip()
+    return user_note or "Not provided"
+
+
 def format_report(row: dict[str, Any]) -> str:
-    location = row.get("user_note") or row.get("location_hint") or "Not provided"
-    authority = row.get("authority", "Local authority not identified")
-    department = row.get("municipal_department") or department_for(row["category"], row)
+    location = report_location(row)
+    department = department_for(row["category"])
     whatsapp = whatsapp_url(
         category=row["category"],
         summary=row["summary"],
@@ -139,10 +127,6 @@ async def create_report(
     user_note: str,
 ) -> tuple[str, IncidentReport]:
     analysis = await agent.analyze_attachment(attachment, user_note)
-    ward = dict(get_ward(guild.id if guild else 0))
-    ward.setdefault("authority", authority_for(user_note, ward))
-    if ward["authority"] == AMC_NAME:
-        ward.setdefault("complaint_portal", AMC_GRIEVANCE_PORTAL)
     report_id = await asyncio.to_thread(
         ticket_store.create,
         analysis=analysis,
@@ -152,7 +136,6 @@ async def create_report(
         reporter_id=reporter.id,
         reporter_name=reporter.display_name,
         user_note=user_note,
-        ward=ward,
     )
     return report_id, analysis
 
@@ -160,15 +143,20 @@ async def create_report(
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+commands_synced = False
 
 
 @bot.event
 async def on_ready():
-    guild = discord.Object(id=DEV_GUILD_ID)
-    bot.tree.copy_global_to(guild=guild)
-    await bot.tree.sync(guild=guild)
+    global commands_synced
+    if not commands_synced:
+        for guild in bot.guilds:
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
+        await bot.tree.sync()
+        commands_synced = True
+        print("Removed guild-scoped commands and synced civic commands globally.")
     print(f"Logged in as {bot.user} (id={bot.user.id})")
-    print(f"Synced civic commands to guild {DEV_GUILD_ID}.")
 
 
 @bot.tree.command(name="ping", description="Check if Civic Sense is online")
@@ -179,7 +167,7 @@ async def ping(interaction: discord.Interaction):
 @bot.tree.command(name="report", description="Analyze a civic issue photo and publish a report")
 @app_commands.describe(
     image="Photo of the civic issue",
-    note="Optional context, such as the street or nearest landmark",
+    note="Optional location or context, such as a street or landmark",
 )
 async def report(
     interaction: discord.Interaction,
@@ -194,10 +182,9 @@ async def report(
     except (ValueError, RuntimeError, discord.HTTPException) as exc:
         await interaction.followup.send(f"Could not create report: {exc}", ephemeral=True)
         return
-    ward = get_ward(interaction.guild.id if interaction.guild else 0)
-    location = note.strip() or analysis["location_hint"]
-    authority = authority_for(note, ward)
-    department = department_for(analysis["category"], ward)
+    location = report_location({**analysis, "user_note": note})
+    authority = AMC_NAME
+    department = department_for(analysis["category"])
     whatsapp = whatsapp_url(
         category=analysis["category"],
         summary=analysis["summary"],
@@ -240,24 +227,24 @@ async def issues(interaction: discord.Interaction, limit: app_commands.Range[int
             "## No reports yet\nNo civic reports have been published."
         )
         return
-    await interaction.response.send_message(
-        "## Latest civic reports\n\n" + "\n\n".join(format_report(row) for row in rows)
-    )
+    messages = ["## Latest civic reports\n\n" + format_report(rows[0])]
+    messages.extend(format_report(row) for row in rows[1:])
+    await interaction.response.send_message(messages[0])
+    for message in messages[1:]:
+        await interaction.followup.send(message)
 
 
 @bot.tree.command(name="edit_ticket", description="Edit a civic ticket you reported")
 @app_commands.describe(
     ticket="Full ticket ID or the first 8 characters",
-    note="Replacement public note",
+    note="Additional context or corrected location",
     status="open, in_progress, resolved, or rejected",
-    severity="low, medium, high, or critical",
 )
 async def edit_ticket(
     interaction: discord.Interaction,
     ticket: str,
     note: str | None = None,
     status: str | None = None,
-    severity: str | None = None,
 ):
     current = await asyncio.to_thread(ticket_store.find, ticket)
     if current is None:
@@ -278,16 +265,9 @@ async def edit_ticket(
             )
             return
         changes["status"] = status
-    if severity is not None:
-        if severity not in {"low", "medium", "high", "critical"}:
-            await interaction.response.send_message(
-                "Severity must be low, medium, high, or critical.", ephemeral=True
-            )
-            return
-        changes["severity"] = severity
     if not changes:
         await interaction.response.send_message(
-            "Provide at least one field to change: note, status, or severity.", ephemeral=True
+            "Provide at least one field to change: note or status.", ephemeral=True
         )
         return
     updated = await asyncio.to_thread(ticket_store.update, current["id"], changes)
@@ -316,66 +296,16 @@ async def disable_home_channel(interaction: discord.Interaction):
     await interaction.response.send_message("Automatic image analysis disabled.", ephemeral=True)
 
 
-@bot.tree.command(name="configure_ward", description="Configure this server's ward and municipal dispatch routing")
-@app_commands.checks.has_permissions(manage_guild=True)
-@app_commands.describe(
-    ward_number="Municipal ward number",
-    locality="Locality or area, for example East Badnera",
-    authority="Responsible local authority; defaults to Amravati Municipal Corporation",
-    municipal_department="Optional override for the automatically selected AMC department",
-    dispatch_channel="Channel for future internal dispatch notifications",
-)
-async def configure_ward(
-    interaction: discord.Interaction,
-    ward_number: str,
-    locality: str,
-    authority: str | None = None,
-    municipal_department: str | None = None,
-    dispatch_channel: discord.TextChannel | None = None,
-):
-    if not interaction.guild:
-        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
-        return
-    wards = load_wards()
-    ward = wards.setdefault(str(interaction.guild.id), {})
-    ward["ward_number"] = ward_number.strip()
-    ward["locality"] = locality.strip()
-    ward["authority"] = (authority or AMC_NAME).strip()
-    ward["complaint_portal"] = AMC_GRIEVANCE_PORTAL
-    if municipal_department is not None:
-        ward["municipal_department"] = municipal_department.strip()
-    if dispatch_channel is not None:
-        ward["dispatch_channel_id"] = dispatch_channel.id
-    save_wards(wards)
-    dispatch_id = ward.get("dispatch_channel_id")
-    dispatch_text = dispatch_channel.mention if dispatch_channel else (
-        f"<#{dispatch_id}>" if dispatch_id else "Not configured (optional)"
-    )
-    await interaction.response.send_message(
-        "## Jurisdiction saved\n"
-        f"**Locality:** {locality}\n"
-        f"**Ward:** {ward_number}\n"
-        f"**Authority:** {ward['authority']}\n"
-        f"**Department:** {municipal_department or 'Automatic AMC routing'}\n"
-        f"**Dispatch channel:** {dispatch_text}",
-        ephemeral=True,
-    )
-
-
 @bot.tree.command(name="status", description="Show the public database and server configuration")
 async def status(interaction: discord.Interaction):
-    ward = get_ward(interaction.guild.id) if interaction.guild else {}
-    home_id = ward.get("home_channel_id")
-    dispatch_id = ward.get("dispatch_channel_id")
+    home_id = get_home_channel_id(interaction.guild.id) if interaction.guild else None
     count = await asyncio.to_thread(ticket_store.count)
     await interaction.response.send_message(
         "## Civic Sense status\n"
         f"**Public reports:** {count}\n"
-        f"**Ward:** {ward.get('ward_number') or 'Not set'}\n"
-        f"**Department:** {ward.get('municipal_department') or 'Automatic routing'}\n"
         f"**Automatic channel:** {f'<#{home_id}>' if home_id else 'Not set'}\n"
-        f"**Authority:** {ward.get('authority') or AMC_NAME}\n"
-        f"**AMC grievance portal:** {ward.get('complaint_portal') or AMC_GRIEVANCE_PORTAL}",
+        f"**Coverage:** {AMC_NAME}\n"
+        f"**AMC grievance portal:** {AMC_GRIEVANCE_PORTAL}",
         ephemeral=True,
     )
 
@@ -406,6 +336,8 @@ async def is_bot_conversation(message: discord.Message) -> bool:
 
 @bot.event
 async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
     if await should_analyze(message):
         images = [attachment for attachment in message.attachments if is_image(attachment)]
         if images:
@@ -414,7 +346,9 @@ async def on_message(message: discord.Message):
                     report_id, analysis = await create_report(
                         images[0], message, message.guild, message.author, message.content
                     )
-                    location = message.content or analysis["location_hint"]
+                    location = report_location(
+                        {**analysis, "user_note": message.content}
+                    )
                     whatsapp = whatsapp_url(
                         category=analysis["category"],
                         summary=analysis["summary"],
@@ -425,10 +359,8 @@ async def on_message(message: discord.Message):
                         f"**{category_label(analysis['category'])}** · `{report_id[:8]}`\n\n"
                         f"> {analysis['summary']}\n\n"
                         f"**Location:** {location}\n"
-                        f"**Authority:** "
-                        f"{authority_for(message.content, get_ward(message.guild.id))}\n"
-                        f"**Department:** "
-                        f"{department_for(analysis['category'], get_ward(message.guild.id))}\n\n"
+                        f"**Authority:** {AMC_NAME}\n"
+                        f"**Department:** {department_for(analysis['category'])}\n\n"
                         f"[{whatsapp_action_label(analysis['category'])}]({whatsapp})"
                     )
                 except (ValueError, RuntimeError, discord.HTTPException) as exc:

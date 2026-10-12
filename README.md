@@ -10,17 +10,18 @@ collection that anyone using the bot can browse with `/issues`.
 - `/report`: analyze and publish a civic issue photo, using the note as location
   and incident context.
 - `/issues`: show the latest public reports and their image links.
-- `/edit_ticket`: let the reporter or a server moderator update a ticket's note,
-  status, or severity.
+- `/edit_ticket`: let the reporter or a server moderator update a ticket's
+  context/location note or status. Severity remains AI-derived.
 - Automatic analysis for images posted in a configured home channel.
-- `/status`, `/ping`, `/contacts`, `/set_home_channel`, `/disable_home_channel`, and
-  administrator-only `/configure_ward`.
-- Persistent local database in `memory/` and ward routing in `data/wards.json`.
+- `/status`, `/ping`, `/contacts`, `/set_home_channel`, and
+  `/disable_home_channel`.
+- Persistent local database in `memory/` and optional server settings in
+  `data/server_settings.json`.
 - Amravati Municipal Corporation routing for roads, electrical, sanitation,
   water/drainage, health, fire-safety, and general civic issues.
 - User notes are passed to the vision agent, stored with the ticket, and shown
-  as location context. The configured municipal department and dispatch channel
-  are shown on the published report.
+  as analysis context. The AI extracts location separately and routes reports
+  to the appropriate AMC department by category.
 - `/contacts` shows official AMC website, grievance portal, WhatsApp, email,
   and office address.
 - Mention the bot or reply to one of its messages to ask a civic question
@@ -35,8 +36,8 @@ collection that anyone using the bot can browse with `/issues`.
 - [`config.py`](./config.py) is the single environment-backed configuration
   module; secrets are never stored in source control.
 - [`ticket.py`](./ticket.py) owns public incident-ticket persistence.
-- [`data/wards.json`](./data/wards.json) maps each Discord server to its ward,
-  municipal department, home channel, and optional dispatch channel.
+- The ignored `data/server_settings.json` file stores optional per-server
+  home-channel settings at runtime.
 
 ## Setup
 
@@ -55,8 +56,6 @@ collection that anyone using the bot can browse with `/issues`.
    # OpenAI-compatible API endpoint supplied by your provider.
    AI_BASE_URL=https://your-provider.example/v1
    AI_VISION_MODEL=your-vision-model
-   # Optional: guild where slash commands are synced immediately during development.
-   DEV_GUILD_ID=1384150666045558876
    ```
 
    `.env` is ignored by Git and must never be committed. The values in the
@@ -75,21 +74,10 @@ messages, and use slash commands.
 
 ## Amravati setup
 
-The bot is configured for **Amravati Municipal Corporation (AMC)**. Set the
-actual AMC ward number for your server with:
-
-```text
-/configure_ward ward_number: 12
-```
-
-The bot then routes reports by category, for example potholes to Roads and
+The bot serves **Amravati Municipal Corporation (AMC)** citywide. Reports are
+routed by category, for example potholes to Roads and
 Works, waste to Sanitation, and flooding to Water Supply and Drainage. The
 official corporation site is [amravaticorporation.in](https://amravaticorporation.in/).
-
-`dispatch_channel_id` is optional. It means a private Discord channel inside
-your server where future internal notifications can be sent; it is not an AMC
-phone number, email address, or government dispatch system. Leave it empty until
-you create such a channel.
 
 The official AMC complaint system is [AMC Complaint Request Entry](https://crm.amravaticorporation.in/).
 

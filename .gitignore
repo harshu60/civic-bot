@@ -3,4 +3,4 @@ __pycache__/
 *.pyc
 .env
 memory/
-data/wards.local.json
+data/server_settings.json

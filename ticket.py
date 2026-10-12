@@ -29,11 +29,9 @@ class TicketStore:
         reporter_id: int,
         reporter_name: str,
         user_note: str,
-        ward: dict[str, Any] | None = None,
     ) -> str:
         ticket_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
-        ward = ward or {}
         metadata = {
             **analysis,
             "image_url": attachment.url,
@@ -46,12 +44,8 @@ class TicketStore:
             "user_note": user_note[:1000],
             "created_at": created_at,
             "status": "open",
-            "ward_number": str(ward.get("ward_number", "")),
-            "municipal_department": str(ward.get("municipal_department", "")),
-            "dispatch_channel_id": str(ward.get("dispatch_channel_id", "")),
-            "authority": str(ward.get("authority", AMC_NAME)),
-            "complaint_portal": str(ward.get("complaint_portal", "")),
-            "locality": str(ward.get("locality", "")),
+            "authority": AMC_NAME,
+            "complaint_portal": "",
         }
         document = f"{analysis['category']}: {analysis['summary']}. {user_note}".strip()
         self.collection.add(ids=[ticket_id], documents=[document], metadatas=[metadata])
@@ -59,7 +53,6 @@ class TicketStore:
 
     def public(self, limit: int = 10) -> list[dict[str, Any]]:
         result = self.collection.get(
-            limit=max(1, min(limit, 25)),
             include=["documents", "metadatas"],
         )
         rows = []
@@ -67,7 +60,8 @@ class TicketStore:
             result["ids"], result.get("documents", []), result.get("metadatas", [])
         ):
             rows.append({"id": ticket_id, "document": document, **metadata})
-        return sorted(rows, key=lambda row: row.get("created_at", ""), reverse=True)
+        rows.sort(key=lambda row: row.get("created_at", ""), reverse=True)
+        return rows[: max(1, min(limit, 25))]
 
     def find(self, ticket_reference: str) -> dict[str, Any] | None:
         reference = ticket_reference.strip().lower()
