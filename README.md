@@ -23,7 +23,8 @@ collection that anyone using the bot can browse with `/issues`.
   as analysis context. The AI extracts location separately and routes reports
   to the appropriate AMC department by category.
 - `/contacts` shows official AMC website, grievance portal, WhatsApp, email,
-  and office address.
+  office address, and the ward-wise Konark sanitation contacts from
+  `Konark_list.pdf`.
 - Mention the bot or reply to one of its messages to ask a civic question
   without using a slash command. It does not respond to ordinary chat messages.
 

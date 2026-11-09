@@ -17,6 +17,8 @@ from config import (
     AMC_WHATSAPP_NUMBER,
     DATA_DIR,
     DISCORD_BOT_TOKEN,
+    KONARK_WARD_CONTACTS,
+    KONARK_ZONE_CONTACTS,
     SERVER_SETTINGS_FILE,
 )
 from ticket import TicketStore
@@ -206,7 +208,7 @@ async def report(
 
 @bot.tree.command(name="contacts", description="Show official AMC contact channels")
 async def contacts(interaction: discord.Interaction):
-    await interaction.response.send_message(
+    messages = [
         "## Official AMC contacts\n"
         f"**Website:** {AMC_WEBSITE}\n"
         f"**Grievance portal:** {AMC_GRIEVANCE_PORTAL}\n"
@@ -214,8 +216,23 @@ async def contacts(interaction: discord.Interaction):
         f"**Email:** `{AMC_EMAIL}`\n"
         f"**Address:** {AMC_ADDRESS}\n\n"
         "_WhatsApp links open a pre-filled draft. Review it and press Send._",
-        ephemeral=True,
-    )
+        "## Konark sanitation contacts\n"
+        "**Ward health inspectors**\n"
+        + "\n".join(
+            f"**Ward {ward}:** {primary} ({primary_phone}), "
+            f"{secondary} ({secondary_phone})"
+            for ward, primary, primary_phone, secondary, secondary_phone in KONARK_WARD_CONTACTS
+        ),
+        "## Konark zone contacts\n"
+        + "\n".join(
+            f"**{zone}:** Assistant Commissioner {assistant} ({assistant_phone}); "
+            f"Supervisor {supervisor} ({supervisor_phone})"
+            for zone, assistant, assistant_phone, supervisor, supervisor_phone in KONARK_ZONE_CONTACTS
+        ),
+    ]
+    await interaction.response.send_message(messages[0], ephemeral=True)
+    for message in messages[1:]:
+        await interaction.followup.send(message, ephemeral=True)
 
 
 @bot.tree.command(name="issues", description="Browse the latest public civic reports")
