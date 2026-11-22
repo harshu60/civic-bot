@@ -47,14 +47,21 @@ Opens the official AMC Business WhatsApp with the formatted complaint details pr
 
 ### Local
 
-1. Install Python 3.10 or newer.
-2. Install dependencies:
+1. Clone the repository and change into its directory:
+
+   ```bash
+   git clone https://github.com/harshu60/civic-bot.git
+   cd civic-bot
+   ```
+
+2. Install Python 3.10 or newer.
+3. Install dependencies:
 
    ```bash
    python -m pip install -r requirements.txt
    ```
 
-3. Copy `.env.example` to `.env` and fill in your credentials:
+4. Copy `.env.example` to `.env` and fill in your credentials:
 
    ```env
    DISCORD_BOT_TOKEN=your_discord_bot_token
@@ -66,8 +73,8 @@ Opens the official AMC Business WhatsApp with the formatted complaint details pr
 
    `.env` is ignored by Git and must never be committed.
 
-4. Enable the **Message Content Intent** in the Discord Developer Portal if automatic home-channel analysis is needed.
-5. Start the bot:
+5. Enable the **Message Content Intent** in the Discord Developer Portal if automatic home-channel analysis is needed.
+6. Start the bot:
 
    ```bash
    python bot.py
